@@ -191,6 +191,7 @@ describe("OpenAIClient", () => {
         const prefs: OpenAIPrefs = {
             name: "OpenAI",
             allowDoNothing: false,
+            forcePrompt: "detailed",
             allowYapping: false,
             allowUnregisteredActions: false,
             promptingStrategy: "tools",
