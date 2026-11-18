@@ -6,6 +6,33 @@ import { TIMEOUTS } from "#lib/api/diagnostics.js";
 const ACTION = v1.zAction.decode({ name: "test_action", description: "test" });
 
 describe("force lifecycle", () => {
+    test("answering a menu before its force runs retires that prompt", async ({harness}) => {
+        await harness.client.hello();
+        await harness.client.registerActions([ACTION]);
+        await harness.client.sendForce([ACTION.name], "First exchange");
+        await harness.server.sendAction(v1.zActData.decode({ id: "auto", name: ACTION.name }));
+        await harness.client.sendActionResult("auto", true);
+        await harness.client.unregisterActions([ACTION.name]);
+        await harness.client.registerActions([ACTION]);
+        expect(harness.server.hasForce).toBe(false);
+        await harness.client.sendForce([ACTION.name], "Next exchange");
+        expect(harness.server.takeForce()?.data.query).toBe("Next exchange");
+        expect(harness.diagnosticKeys).not.toContain("prot/force/multiple");
+    });
+
+    test("withdrawn alternatives stay withdrawn when a force is regenerated", async ({harness}) => {
+        const other = { ...ACTION, name: "other" };
+        await harness.client.hello();
+        await harness.client.registerActions([ACTION, other]);
+        await harness.client.sendForce([ACTION.name, other.name], "Choose either");
+        const original = harness.server.takeForce()!;
+        await harness.client.unregisterActions([ACTION.name]);
+        await harness.client.registerActions([ACTION]);
+        expect(original.phase).toBe("retry");
+        harness.server.completeForce(original);
+        expect(harness.server.takeForce()?.actions.map(action => action.name)).toEqual([other.name]);
+    });
+
     test("prioritizes forces and lets critical replace queued lower priorities", async ({harness}) => {
         await harness.client.hello();
         await harness.client.registerActions([ACTION]);

@@ -190,7 +190,7 @@ export class Scheduler {
 
     private forceGame(game: Game, force: ActiveForce) {
         const candidates = force.actions.map(action => ({ game, action }));
-        new ResultAsync(this.actInner(true, candidates, force.data, force.data.priority))
+        new ResultAsync(this.actInner(true, candidates, force, force.data.priority))
             .match(
                 () => game.completeForce(force),
                 // user stop/preempt
@@ -217,7 +217,7 @@ export class Scheduler {
     private async actInner(
         force: boolean,
         candidates?: ActionCandidate[] | null,
-        forceContext?: ActiveForce["data"],
+        gameForce?: ActiveForce,
         priority: ForcePriority = "low",
     ) {
         this.pendingActTimer.cancel();
@@ -250,7 +250,7 @@ export class Scheduler {
         this.#generatedTokens = undefined;
         const started = Date.now();
         const actRes = force
-            ? await this.activeEngine!.forceAct(this.session, actionSet.actions, controller.signal, forceContext)
+            ? await this.activeEngine!.forceAct(this.session, actionSet.actions, controller.signal, gameForce?.data)
             : await this.activeEngine!.tryAct(this.session, actionSet.actions, controller.signal);
         const metrics: ActMetrics = { latencyMs: Date.now() - started, tokens: this.#generatedTokens };
         this.#abort = null;
@@ -259,7 +259,9 @@ export class Scheduler {
             this.resetEngineErrors();
         }
         const result = await actRes
-            .asyncAndThrough(act => this.perform(act, force, engine, actionSet.targetsByName, metrics))
+            .asyncAndThrough(act => gameForce && gameForce.phase !== "generating"
+                ? errAsync<EngineActResult, ActError>("cancelled")
+                : this.perform(act, force, engine, actionSet.targetsByName, metrics))
             .orTee(e => e instanceof EngineError && this.onError(e, engine, secrets));
         this.#busy = false;
         this.requestDrain();

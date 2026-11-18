@@ -150,6 +150,7 @@ export class Game {
     // v1 spec: failed forced actions get retried
     private retryForce() {
         const force = this.activeForce!;
+        if (!force.data.action_names.length) return this.closeForce("actions_unregistered");
         const retries = force.retryCount ?? 0;
         if (retries >= FORCE_RETRY_LIMIT) return this.closeForce("retry_exhausted");
         force.retryCount = retries + 1;
@@ -438,6 +439,26 @@ export class Game {
             }
         }
         EVENT_BUS.emit('api/game/unregister', { game: { id: this.id, name: this.name }, action_names: actions });
+        // A later registration with the same name can belong to a different prompt.
+        const withdraw = (force: QueuedGameForce) => {
+            const remaining = force.data.action_names.filter(name => !actions.includes(name));
+            if (remaining.length === force.data.action_names.length) return false;
+            force.data = { ...force.data, action_names: remaining };
+            return true;
+        };
+        for (let i = this.forceQueueValues.length - 1; i >= 0; i--) {
+            const force = this.forceQueueValues[i];
+            if (withdraw(force) && !force.data.action_names.length) {
+                this.forceQueueValues.splice(i, 1);
+                this.emitForceDropped(force, "actions_unregistered");
+            }
+        }
+        const active = this.activeForce;
+        if (active && withdraw(active) && active.phase !== "sent") {
+            active.phase = "retry";
+            if (!active.data.action_names.length) this.closeForce("actions_unregistered");
+            else this.wakeScheduler();
+        }
     }
 
     async forceAction(msg: v1.ForceAction) {
@@ -463,7 +484,7 @@ export class Game {
         if (this.hasForce) {
             this.diagnostics.trigger("prot/force/multiple", { msgData: msg.data });
         }
-        this.enqueueForce({ data: msg.data });
+        this.enqueueForce({ data: { ...msg.data, action_names: actions.map(action => action.name) } });
         EVENT_BUS.emit('api/game/force', {
             game: { id: this.id, name: this.name },
             ...msg.data,
