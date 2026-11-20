@@ -6,6 +6,28 @@ import { TIMEOUTS } from "#lib/api/diagnostics.js";
 const ACTION = v1.zAction.decode({ name: "test_action", description: "test" });
 
 describe("force lifecycle", () => {
+    for (const { name, menu, success, message, remains } of [
+        { name: "choose_dialogue", menu: 47, success: true,  message: "", remains: false },
+        { name: "choose_dialogue", menu: 48, success: true,  message: "", remains: true },
+        { name: "choose_dialogue", menu: 47, success: false, message: "Pick a line by number", remains: true },
+        { name: "choose_dialogue", menu: 47, success: true,  message: "No line was spoken.", remains: true },
+        { name: "read_journal",    menu: 47, success: true,  message: "", remains: true },
+    ]) {
+        test(`auto ${name} on menu ${menu} (${success}, '${message}') leaves force pending: ${remains}`, async ({ harness }) => {
+            await harness.client.hello();
+            await harness.client.registerActions(["choose_dialogue", "read_journal"].map(name => ({ ...ACTION, name })));
+            await harness.client.sendForce(["choose_dialogue"], "Pick a line", "Shopkeeper\n\nDialogue menu 47:\n1. About this shovel...");
+            await harness.server.sendAction(v1.zActData.decode({ id: "auto", name, data: JSON.stringify({ menu, option: 1 }) }));
+            expect(harness.server.hasForce).toBe(true);
+            await harness.client.sendActionResult("auto", success, message);
+            expect(harness.server.hasForce).toBe(remains);
+            if (!remains) {
+                await harness.client.sendForce(["choose_dialogue"], "Pick a line", "Dialogue menu 48:\n1. How much is it?");
+                expect(harness.diagnosticKeys).not.toContain("prot/force/multiple");
+            }
+        });
+    }
+
     test("answering a menu before its force runs retires that prompt", async ({harness}) => {
         await harness.client.hello();
         await harness.client.registerActions([ACTION]);

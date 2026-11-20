@@ -17,6 +17,7 @@ export type PendingAction = {
     actData: v1.ActData,
     sentAt: number,
     timeout: ReturnType<typeof setTimeout>,
+    autoDialogueMenu?: number,
 };
 export type QueuedGameForce = {
     data: v1.ForceAction["data"];
@@ -501,11 +502,18 @@ export class Game {
         if (this.activeForce?.phase === "generating") {
             this.activeForce.phase = "sent";
             this.activeForce.actId = actData.id;
+        } else if (actData.name === "choose_dialogue" && actData.data) {
+            // SCUMM numbers its menus. Auto-act may already be generating a choice
+            // when the force for that same menu arrives.
+            const args = jsonParse(actData.data);
+            const menu = args.isOk() ? args.value?.menu : undefined;
+            if (Number.isSafeInteger(menu))
+                return this.dispatchAction(actData, menu);
         }
         await this.dispatchAction(actData);
     }
 
-    private async dispatchAction(actData: v1.ActData) {
+    private async dispatchAction(actData: v1.ActData, autoDialogueMenu?: number) {
         const sentAt = Date.now();
         const timeout = setTimeout(() => {
             this.diagnostics.trigger("perf/timeout/action_result", prettyPending(pending));
@@ -514,7 +522,7 @@ export class Game {
                 ACTION_RESULT_TIMEOUT - TIMEOUTS["perf/timeout/action_result"]
             );
         }, TIMEOUTS["perf/timeout/action_result"]);
-        const pending: PendingAction = { actData, sentAt, timeout };
+        const pending: PendingAction = { actData, sentAt, timeout, autoDialogueMenu };
         this.pendingActions.set(actData.id, pending);
         await this.conn.send(v1.zAct.decode({data: actData}));
     }
@@ -558,6 +566,14 @@ export class Game {
             success,
             message,
         });
+        // SCUMM acknowledges an accepted choice with an empty success. A
+        // successful no-op (menu gone or already answered) includes a message.
+        if (pending.autoDialogueMenu !== undefined && success && !message) {
+            const header = `Dialogue menu ${pending.autoDialogueMenu}:`;
+            const index = this.forceQueueValues.findIndex(({ data }) =>
+                data.action_names.includes(actData.name) && data.state?.split("\n").includes(header));
+            if (index >= 0) this.forceQueueValues.splice(index, 1);
+        }
         this.settleAction(pending, success);
     }
 
