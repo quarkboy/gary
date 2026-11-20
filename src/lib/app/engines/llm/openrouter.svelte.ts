@@ -46,10 +46,12 @@ export class OpenRouter extends LLMEngine<OpenRouterPrefs> {
         if (!this.options.apiKey) {
             return errAsync(new ConfigError("OpenRouter API key is required"));
         }
-        return new ResultAsync(this.client.generate(request, {
-            // some providers require reasoning (dude why)
-            // provider: { require_parameters: true },
-        }, signal));
+        // Opus 5.5 rejects required tool choice. Gary still supplies the force
+        // prompt and its allowed tools when requesting an action.
+        const params = this.modelId() === "anthropic/claude-opus-5.5" && request.toolChoice === "required"
+            ? { ...request, toolChoice: "auto" as const }
+            : request;
+        return new ResultAsync(this.client.generate(params, {}, signal));
     }
 
     static async testApiKey(apiKey: string): Promise<Result<void, EngineError>> {
